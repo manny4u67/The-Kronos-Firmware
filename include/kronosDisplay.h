@@ -1,6 +1,8 @@
+// kronosDisplay.h - bitmaps and display text placeholder
+#pragma once
 #include <Arduino.h>
 
-String displayText;
+extern String displayText; // defined in a single cpp
 
 const unsigned char myBootLogo [] PROGMEM = 
 {

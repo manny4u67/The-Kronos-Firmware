@@ -6,39 +6,42 @@
 #include <AS5600.h>
 #include <BleKeyboard.h>
 #include <EEPROM.h>
+#include "config.h"
 #include "kronosDisplay.h"
 #include "mxgicHall.h"
 #include "mxgicDebounce.h"
 #include "mxgicRotary.h"
 #include "ledMation.h"
 #include "mxgicTimer.h"
+#include "DisplayController.h"
 #include "mysecret.h" // where hidden variables can be placed
 //#include "ledMation.h"
 
-// EEPROM PROGRAMMING FOR STATE MEMORY
+// Provide storage for globals declared 'extern' in headers
+Adafruit_ADS1115 ads1; // 0x48
+Adafruit_ADS1115 ads2; // 0x49
+AS5600 as5600;
+
+// Global display text storage (declared extern in kronosDisplay.h)
+String displayText;
+
+// EEPROM PROGRAMMING FOR STATE MEMORY (future use)
 #define EEPROM_SIZE 2
-int testEEPROM = 150;
+int testEEPROM = 150; // currently unused
 
 // BLE Keyboard 
 BleKeyboard bleKeyboard("KRONOS V1", "AddeyX", 100);
 
-//I2C 
-#define SDA0_Pin 17   // ESP32 SDA PIN
-#define SCL0_Pin 18   // ESP32 SCL PIN
+// I2C pins now sourced from config.h (PIN_SDA0 / PIN_SCL0)
 
 // OLED Display 
 #define SCREEN_WIDTH 128 // OLED width,  in pixels
 #define SCREEN_HEIGHT 64 // OLED height, in pixels
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// ARGB LEDS
-#define SCREENARRAY  48
-#define NUM_LEDS_SCREENARRAY 75
-CRGB leds_75[NUM_LEDS_SCREENARRAY];
-
-#define BUTTONARRAY   35
-#define NUM_LEDS_BUTTONARRAY  6
-CRGB leds_6[NUM_LEDS_BUTTONARRAY];
+// ARGB LEDS (pins and counts from config.h)
+CRGB leds_75[LED_COUNT_SCREEN];
+CRGB leds_6[LED_COUNT_BUTTON];
 
 // Timer Configurations
 long duration;
@@ -89,7 +92,7 @@ bool toggle = false;
 void infiniteScan(void * parameters) {
   for(;;) {
     if(initializedK){
-      if(debounceHall[0]->debounce(LTBTN.checkTrig(0))){
+  if(debounceHall[0]->update(LTBTN.checkTrig(0))){
         String input = PhantomPass;
 
         for (int i = 0; i < input.length(); i++) {
@@ -98,20 +101,20 @@ void infiniteScan(void * parameters) {
           delay(10);
         }
       }
-      else if (debounceHall[1]->debounce(RTBTN.checkTrig(0))){
+  else if (debounceHall[1]->update(RTBTN.checkTrig(0))){
         bleKeyboard.press(KEY_LEFT_GUI);
         bleKeyboard.press(KEY_NUM_MINUS);
       }
-      else if (debounceHall[2]->debounce(LMBTN.checkTrig(0))){
+  else if (debounceHall[2]->update(LMBTN.checkTrig(0))){
         bleKeyboard.press(KEY_LEFT_CTRL);
         bleKeyboard.press('z');
       }
-      else if (debounceHall[3]->debounce(RMBTN.checkTrig(0))){
+  else if (debounceHall[3]->update(RMBTN.checkTrig(0))){
         bleKeyboard.press(KEY_LEFT_CTRL);
         bleKeyboard.press(KEY_LEFT_SHIFT);
         bleKeyboard.press('z');       
       }
-      else if (debounceHall[4]->debounce(LBBTN.checkTrig(0))){
+  else if (debounceHall[4]->update(LBBTN.checkTrig(0))){
         String input = MainSolWallet;
         for (int i = 0; i < input.length(); i++) {
           bleKeyboard.print(input[i]);
@@ -119,7 +122,7 @@ void infiniteScan(void * parameters) {
           delay(10);
         }
       }
-      else if (debounceHall[5]->debounce(RBBTN.checkTrig(0))){
+  else if (debounceHall[5]->update(RBBTN.checkTrig(0))){
         bleKeyboard.press(KEY_DELETE);
       }
       bleKeyboard.releaseAll();
@@ -168,146 +171,7 @@ void ledFadeUp(CRGB* leds, int numLEDS , CRGB color){
   FastLED.show();
   FastLED.setBrightness(hallKnob.scanMapAngle());
 }
-void screenRender(int screen,int timer,int misc = 0, String optText =  "NULL") {
-  int secondsRender;
-  int minutesRender;
-  switch (screen) {
-    case 0: // Unused 
-      oled.clearDisplay();
-      oled.setTextSize(2);
-      oled.setCursor(0, 0);
-      oled.print("hi");
-    break;
-
-    case 1: // Blank Boot Screen
-      oled.clearDisplay(); // clear display
-      oled.setTextSize(1);         // set text size
-      oled.setTextColor(WHITE);    // set text color
-      oled.drawBitmap(0, 0, myBootLogo, 128, 64, WHITE);
-      oled.display();
-      delay(1000);
-    break;
-
-    case 2: // Boot Screen with EEPROM Data
-      oled.clearDisplay(); // clear display
-      oled.setTextSize(1);         // set text size
-      oled.setTextColor(WHITE);    // set text color
-      oled.drawBitmap(0, 0, myLogo, 128, 64, WHITE);
-      //oled.print(F("EEPROM SAYS!: "));
-      //oled.println(EEPROM.read(0));
-      oled.display();
-      delay(1000);
-    break;
-
-    case 3:
-      currentMillis3 = millis(); 
-      if (currentMillis3 - previousMillis3 >= interval3) {
-        oled.clearDisplay();
-        oled.setTextSize(1);         // set text size
-        oled.setCursor(0, 0);
-        oled.print(F("Sensor Readings:")); //Using oled.print(F()) due to it not taking up RAM
-        oled.print(F("Hall Angle: ")); oled.println(angleHall);
-        oled.print(F("LT: "));oled.print(hall[0]->currentVal);oled.print(F(" RT: "));oled.println(hall[1]->currentVal);
-        oled.print(F("LM: "));oled.print(hall[2]->currentVal);oled.print(F(" RM: "));oled.println(hall[3]->currentVal);
-        oled.print(F("LB: "));oled.print(hall[4]->currentVal);oled.print(F(" RB: "));oled.println(hall[5]->currentVal);
-        oled.print(F("Button: ")); oled.println(digitalRead(8)); oled.print(F(" ")); oled.print(duration); oled.println(F(" us"));
-        oled.print(hall[0]->precision);
-        oled.display();
-        previousMillis3 = currentMillis3;
-      }
-    break;
-
-    case 4:
-      oled.clearDisplay();
-      oled.setTextSize(2);
-      oled.setCursor(0, 0);
-      oled.println(displayText);
-      oled.println(hall[misc]->cali());
-      oled.display();
-    break;
-
-    case 5:
-      oled.clearDisplay();
-      oled.setTextSize(2);
-      oled.setCursor(0, 0);
-      oled.println(displayText);
-      oled.println("Max :"+ String(hall[misc]->getMax())); oled.print("Min :"+ String(hall[misc]->getMin()));
-      oled.display();
-    break;
-
-    case 6:
-      currentMillis2 = millis(); 
-      if (currentMillis2 - previousMillis2 >= interval2) {
-        oled.clearDisplay();
-        oled.setTextSize(1);
-        oled.drawBitmap(0, 0, myLogo, 128, 64, WHITE);
-        oled.setCursor(0, 0);
-        oled.print("Layer 1");
-        oled.display();
-        previousMillis3 = currentMillis3;
-      }
-    break;
-
-    case 7:
-      oled.clearDisplay();
-      oled.setTextSize(4);
-      oled.setCursor(0, 0);
-      oled.println(String(timer) + F(" M"));
-      oled.setTextSize(1);
-      oled.println();
-      oled.println();
-      oled.println();
-      oled.println(F("Confirm       Cancel")); 
-      oled.display();
-    break;
-
-    case 8:
-
-    break;
-
-    case 9: // Timer Left Display
-      minutesRender = maintimer.checkTimeLeftSeconds() / 60;
-      secondsRender = maintimer.checkTimeLeftSeconds() % 60;
-      oled.clearDisplay();
-      oled.setTextSize(1);
-      oled.setCursor(0,0);
-      oled.setTextSize(1);
-      oled.println(F("Time Left: "));
-      oled.println();
-      oled.setTextSize(3);
-      oled.print(String(minutesRender)  );
-      oled.setTextSize(1);
-      oled.print(F("M "));
-      oled.setTextSize(3);
-      oled.print(String(secondsRender));
-      oled.setTextSize(1);
-      oled.print(F("S"));
-      oled.setTextSize(1);
-      oled.println();
-      oled.println();
-      oled.println();
-      oled.println();
-      oled.println();
-      oled.println(F("Pause       Cancel")); 
-      oled.display();
-    break;
-
-    case 10: // Timer Over Display
-      oled.clearDisplay();
-      oled.setTextSize(1);
-      oled.setCursor(0,0);
-      oled.println(String(maintimer.setTime) + F("M Timer Over:"));
-      oled.setTextSize(4);
-      oled.println(F("REST"));
-      oled.setTextSize(1);
-      oled.println();
-      oled.println();
-      oled.println();
-      oled.println(F("OK       Go Again"));
-      oled.display();
-    break;
-  }
-}
+// screenRender deprecated; using DisplayController abstraction now.
 
 // Initialize Calibration for Kronos (Only when EEPROM is 0)
 void initializeKronos(){
@@ -322,23 +186,19 @@ void initializeKronos(){
     calibrationComplete = 0;
     while(!calibrationComplete) {
       while(hall[currentHall]->checkTrig(0) == 0) {
-        displayText = "PRESS BTN" + String(currentHall+1);
-        screenRender(4,0,currentHall);
+  displayText = "PRESS BTN" + String(currentHall+1);
       }  
       startTimer = millis();
       arrayCalibrationComplete = 0;
       while((hall[currentHall]->checkTrig(0) == 1) && (!arrayCalibrationComplete)) {
         if ((startTimer + (timerSet/2)) > (millis())) {
           displayText = "FULLY PRESS";
-          screenRender(4,0,currentHall);
         }
         else if ((startTimer + (timerSet/2)+(timerSet / 4)) > millis()) {
           displayText = "CALIBRATING";
-          screenRender(4,0,currentHall);
         }
         else if ((startTimer + timerSet) < millis()) {
           displayText = "HALL " + String(currentHall+1) + "CHK";
-          screenRender(5,0,currentHall);
           delay(500);
           arrayCalibrationComplete = 1;
           calibrationComplete = 1;
@@ -370,17 +230,14 @@ bool timerMenu (){
     menuNowTime = millis();
     menuTimeDiff = menuNowTime - menuEnteredTime;
     if (maintimer.timerRunning == 1 ) {
-      // Show time left
-      screenRender (9,timePrint,0);
+  // Timer running display handled in loop via DisplayController
       // Check which buttons has been pressed
       timerMenuKeyScan(menuTimeDiff);
     }
     else if (maintimer.timerRunning == 0){
-      timePrint = maintimer.setCheck(hallKnob.scanMapAngle(12,255,1)); // Set Timer Display Based On Rotary Encoder
-      screenRender(7,timePrint,0); // Render display timer time currently
+  timePrint = maintimer.minutesOption(hallKnob.scanMapAngle(12,255,1)); // Set Timer Display Based On Rotary Encoder
       if (LTBTN.checkTrig(0)){ // Check if left button was pressed
-        maintimer.start(hallKnob.scanMapAngle(12,255,1)); // Start time based on rotary encoder location
-        screenRender (8,timePrint,0 ,"Timer Set!"); 
+  maintimer.start(hallKnob.scanMapAngle(12,255,1)); // Start time based on rotary encoder location
         delay (500);
         return 1;
       }
@@ -393,18 +250,19 @@ bool timerMenu (){
 }
 
 bool timerEnd(){
-  screenRender (10,0,0 ,"Timer Set!");
-  solidColor2(leds_75, NUM_LEDS_SCREENARRAY , CRGB::Red);
+  DisplayController disp(oled, maintimer);
+  disp.showTimerOver();
+  solidColor2(leds_75, LED_COUNT_SCREEN , CRGB::Red);
   delay(1000);
   while(true){
-    screenRender (10,0,0 ,"Timer Set!");
+  disp.showTimerOver();
     if (LTBTN.checkTrig(0)){ // Check if left button was pressed 
-      solidColor2(leds_75, NUM_LEDS_SCREENARRAY , CRGB::Black);
+  solidColor2(leds_75, LED_COUNT_SCREEN , CRGB::Black);
       maintimer.reset();
       return 1;
     }
     else if (RTBTN.checkTrig(0)){
-      solidColor2(leds_75, NUM_LEDS_SCREENARRAY , CRGB::Black);
+  solidColor2(leds_75, LED_COUNT_SCREEN , CRGB::Black);
       maintimer.reset();
       timerMenu();
       return 1;
@@ -423,12 +281,12 @@ void audioLevelGraph() {
   while(1){
     leds_75[pos] = CHSV(150, 255, 255);
     // Blur the entire strip
-    blur1d(leds_75, NUM_LEDS_SCREENARRAY, 172);
-    fadeToBlackBy(leds_75, NUM_LEDS_SCREENARRAY, 4);
+  blur1d(leds_75, LED_COUNT_SCREEN, 172);
+  fadeToBlackBy(leds_75, LED_COUNT_SCREEN, 4);
     FastLED.show();
     // Move the position of the dot
     if (toggle) {
-      pos = (pos + 1) % NUM_LEDS_SCREENARRAY;
+  pos = (pos + 1) % LED_COUNT_SCREEN;
     }
     toggle = !toggle;
     delay(20);
@@ -459,7 +317,7 @@ void setup() {
   RBBTN.setChannel(2,2);
 
   // Initialize I2C
-  Wire.begin(SCL0_Pin, SDA0_Pin );  // SCL = 17, SDA = 18
+  Wire.begin(PIN_SCL0, PIN_SDA0 );
 
   // Initialize OLED Display
   if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
@@ -485,14 +343,17 @@ void setup() {
   as5600.begin();
 
   // Initialize LED Strips
-  FastLED.addLeds<WS2812B, SCREENARRAY, GRB>(leds_75, NUM_LEDS_SCREENARRAY);
-  FastLED.addLeds<WS2812B, BUTTONARRAY, GRB>(leds_6, NUM_LEDS_BUTTONARRAY);
+  FastLED.addLeds<WS2812B, PIN_SCREENARRAY, GRB>(leds_75, LED_COUNT_SCREEN);
+  FastLED.addLeds<WS2812B, PIN_BUTTONARRAY, GRB>(leds_6, LED_COUNT_BUTTON);
   FastLED.setBrightness(25);
 
   // LED Strip Animation
-  ledCycle(leds_75, NUM_LEDS_SCREENARRAY);
-  screenRender(1,0,0);
-  screenRender(2,0,0);
+  ledCycle(leds_75, LED_COUNT_SCREEN);
+  DisplayController disp(oled, maintimer);
+  disp.showBootBlank(myBootLogo);
+  delay(500);
+  disp.showBootLogo(myLogo);
+  delay(500);
 
   // Set Precision variables for all 6 hall effect sensors
   int setPrecisionTemp = 3;
@@ -546,7 +407,7 @@ void setup() {
   scanEnabled = 1;
 
   // Clear Display
-  ledClear(leds_75, NUM_LEDS_SCREENARRAY);
+  ledClear(leds_75, LED_COUNT_SCREEN);
   FastLED.show();
 
   audioLevelGraph(); // Run Audio Level Graph
@@ -564,13 +425,17 @@ void setup() {
 
 void loop() {
   long start = micros(); 
+  static DisplayController disp(oled, maintimer);
   if(digitalRead(8) == 1) { // if button is not pressed
-    if (maintimer.timeOver() && (maintimer.timerRunning == 1) ){ // if timer is over
-      timerEnd(); 
-    }
-    else{ 
-      screenRender(3,0,0);
-      delay (10);
+    if (maintimer.timeOver() && (maintimer.timerRunning == 1) ){
+      timerEnd();
+    } else {
+      currentMillis3 = millis();
+      if (currentMillis3 - previousMillis3 >= interval3) {
+        angleHall = hallKnob.readRawAngle();
+        disp.showSensors(angleHall, hall);
+        previousMillis3 = currentMillis3;
+      }
     }
   }
   else { // if button is pressed
