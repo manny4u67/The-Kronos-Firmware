@@ -22,7 +22,11 @@ The Kronos is a hall effect macropad timer. Capable of controlling devices over 
 
 ## Documentation
 
-WIP
+- docs/FASTLED_COMPILATION_FIX.md
+- docs/HALL_CALIBRATION_GURU_MEDITATION_FIX.md
+- docs/WIFI_KEYBINDS_CONFIG.md
+- docs/WIFI_KEYBINDS_PERSISTENCE_FIX.md
+- docs/WIFI_KEYBINDS_MODULE_SPLIT.md
 
 
 

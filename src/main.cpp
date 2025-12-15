@@ -6,9 +6,6 @@
 #include <AS5600.h>
 #include <BleKeyboard.h>
 #include <EEPROM.h>
-#include <WiFi.h>
-#include <WebServer.h>
-#include <Preferences.h>
 #include "kronosDisplay.h"
 #include "mxgicHall.h"
 #include "mxgicDebounce.h"
@@ -16,6 +13,8 @@
 #include "ledMation.h"
 #include "mxgicTimer.h"
 #include "mysecret.h" // where hidden variables can be placed
+#include "keybinds.h"
+#include "wifi_config.h"
 //#include "ledMation.h"
 
 // EEPROM PROGRAMMING FOR STATE MEMORY
@@ -100,93 +99,7 @@ static void bleTypeString(const String& input);
 static constexpr const char* WIFI_AP_SSID = "KRONOS-CONFIG";
 static constexpr const char* PREFS_NAMESPACE = "kronos";
 
-static constexpr const char* ACTION_TYPE_PREFIX = "TYPE:";
-
-Preferences prefs;
 String hallActions[HALL_BUTTON_COUNT];
-
-static String htmlEscape(const String& input) {
-  String out;
-  out.reserve(input.length());
-  for (size_t i = 0; i < (size_t)input.length(); i++) {
-    const char c = input[i];
-    switch (c) {
-      case '&': out += F("&amp;"); break;
-      case '<': out += F("&lt;"); break;
-      case '>': out += F("&gt;"); break;
-      case '"': out += F("&quot;"); break;
-      default: out += c; break;
-    }
-  }
-  return out;
-}
-
-static String prefsKeyForButton(size_t idx) {
-  return String("btn") + String((int)idx);
-}
-
-static String defaultActionForButton(size_t idx) {
-  switch (idx) {
-    case 0: return String(ACTION_TYPE_PREFIX) + PhantomPass;
-    case 1: return F("GUI+NUM_MINUS");
-    case 2: return F("CTRL+Z");
-    case 3: return F("CTRL+SHIFT+Z");
-    case 4: return String(ACTION_TYPE_PREFIX) + MainSolWallet;
-    case 5: return F("DELETE");
-    default: return String();
-  }
-}
-
-static void loadKeybindsFromPrefs() {
-  if (!prefs.begin(PREFS_NAMESPACE, false)) {
-    // If Preferences fails, keep defaults in RAM.
-    for (size_t i = 0; i < HALL_BUTTON_COUNT; i++) {
-      hallActions[i] = defaultActionForButton(i);
-    }
-    Serial.println(F("[prefs] begin() failed; using defaults"));
-    return;
-  }
-
-  bool wroteAnyDefaults = false;
-  for (size_t i = 0; i < HALL_BUTTON_COUNT; i++) {
-    const String key = prefsKeyForButton(i);
-
-    // Only auto-fill defaults when the key does not exist.
-    // This preserves intentionally-empty strings.
-    if (!prefs.isKey(key.c_str())) {
-      hallActions[i] = defaultActionForButton(i);
-      prefs.putString(key.c_str(), hallActions[i]);
-      wroteAnyDefaults = true;
-      continue;
-    }
-
-    hallActions[i] = prefs.getString(key.c_str(), "");
-  }
-
-  prefs.end();
-  if (wroteAnyDefaults) {
-    Serial.println(F("[prefs] initialized missing keys with defaults"));
-  }
-  for (size_t i = 0; i < HALL_BUTTON_COUNT; i++) {
-    Serial.print(F("[prefs] btn"));
-    Serial.print((int)i);
-    Serial.print(F("="));
-    Serial.println(hallActions[i]);
-  }
-}
-
-static void saveKeybindsToPrefs() {
-  if (!prefs.begin(PREFS_NAMESPACE, false)) {
-    Serial.println(F("[prefs] begin() failed; not saving"));
-    return;
-  }
-  for (size_t i = 0; i < HALL_BUTTON_COUNT; i++) {
-    const String key = prefsKeyForButton(i);
-    prefs.putString(key.c_str(), hallActions[i]);
-  }
-  prefs.end();
-  Serial.println(F("[prefs] saved keybinds"));
-}
 
 static bool pressKeyToken(const String& tokenUpper) {
   if (tokenUpper.length() == 0) {
@@ -271,85 +184,7 @@ static void executeConfiguredAction(const String& action) {
   }
 }
 
-static String buildConfigHtml() {
-  String html;
-  html.reserve(4096);
-  html += F("<!doctype html><html><head><meta charset='utf-8'>");
-  html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
-  html += F("<title>KRONOS WiFi Config</title></head><body>");
-  html += F("<h2>KRONOS Keybind Config</h2>");
-  html += F("<p>Enter either <b>TYPE:</b>text to type, or a key combo like <b>CTRL+SHIFT+Z</b>, <b>GUI+NUM_MINUS</b>, <b>DELETE</b>.</p>");
-  html += F("<form method='POST' action='/save'>");
-  for (size_t i = 0; i < HALL_BUTTON_COUNT; i++) {
-    html += F("<div style='margin:10px 0'>");
-    html += F("<label>");
-    html += F("Button ");
-    html += String((int)i + 1);
-    html += F(": <input style='width:95%' maxlength='220' name='btn");
-    html += String((int)i);
-    html += F("' value='");
-    html += htmlEscape(hallActions[i]);
-    html += F("'></label></div>");
-  }
-  html += F("<button type='submit'>Save & Reboot</button>");
-  html += F("</form>");
-  html += F("</body></html>");
-  return html;
-}
 
-static void renderWifiConfigModeScreen(const IPAddress& ip) {
-  oled.clearDisplay();
-  oled.setTextSize(1);
-  oled.setCursor(0, 0);
-  oled.println(F("WiFi Config Mode"));
-  oled.println();
-  oled.print(F("SSID: "));
-  oled.println(WIFI_AP_SSID);
-  oled.print(F("IP: "));
-  oled.println(ip);
-  oled.println();
-  oled.println(F("Open / on phone"));
-  oled.display();
-}
-
-static void startWifiConfigPortal() {
-  loadKeybindsFromPrefs();
-
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(WIFI_AP_SSID);
-
-  IPAddress ip = WiFi.softAPIP();
-  Serial.print(F("Config AP started. Connect to "));
-  Serial.print(WIFI_AP_SSID);
-  Serial.print(F(" then open http://"));
-  Serial.println(ip);
-
-  renderWifiConfigModeScreen(ip);
-
-  static WebServer server(80);
-  server.on("/", HTTP_GET, []() {
-    server.send(200, "text/html", buildConfigHtml());
-  });
-  server.on("/save", HTTP_POST, []() {
-    for (size_t i = 0; i < HALL_BUTTON_COUNT; i++) {
-      const String argName = prefsKeyForButton(i);
-      if (server.hasArg(argName)) {
-        hallActions[i] = server.arg(argName);
-        hallActions[i].trim();
-      }
-    }
-    saveKeybindsToPrefs();
-    server.send(200, "text/html", F("<html><body><h3>Saved. Rebooting...</h3></body></html>"));
-    delay(500);
-    ESP.restart();
-  });
-  server.begin();
-
-  for(;;) {
-    server.handleClient();
-    delay(5);
-  }
-}
 
 static void bleTypeString(const String& input) {
   for (int idx = 0; idx < input.length(); idx++) {
@@ -807,11 +642,11 @@ void setup() {
 
   // If requested, enter WiFi config mode now that the screen is initialized.
   if (enterWifiConfig) {
-    startWifiConfigPortal();
+    startWifiConfigPortal(WIFI_AP_SSID, PREFS_NAMESPACE, oled, hallActions, HALL_BUTTON_COUNT);
   }
 
   // Load configured keybinds (defaults preserved on first boot)
-  loadKeybindsFromPrefs();
+  keybindsLoadFromPrefs(PREFS_NAMESPACE, hallActions, HALL_BUTTON_COUNT);
 
   // Initialize ADS1115 Modules
   if (!ads1.begin(0x48)) {
