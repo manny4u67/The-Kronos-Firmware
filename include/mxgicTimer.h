@@ -10,6 +10,8 @@ class MxgicTimer {
     bool timerReady = 0;
     bool timerRunning = 0; // Timer is currently counting down 
     bool timerPaused = 0; // Timer is not counting down
+    unsigned long setMinutes = 0UL;
+    unsigned long totalDurationMs = 0UL;
     unsigned long setTime = 0UL;
     unsigned long endTime = 0UL;
     unsigned long currentTime = 0UL;
@@ -26,80 +28,80 @@ class MxgicTimer {
     }
 
     void start(int index){
-        if (timerRunning == 0){
-            currentTime = millis();
-            setTime = timeArray[1][index];
-            endTime = setTime + millis();
-            timerRunning = 1;
-            timerPaused = 0;
-            return;
-        } 
-        else {
+        if (timerRunning != 0) {
             return;
         }
-            return;
+
+        index = constrain(index, 0, 11);
+        currentTime = millis();
+        setMinutes = timeArray[0][index];
+        totalDurationMs = timeArray[1][index];
+        setTime = totalDurationMs;
+        endTime = millis() + totalDurationMs;
+        timerRunning = 1;
+        timerPaused = 0;
     }
 
     void pause(){
-        setTime = endTime - millis();
+        if (!timerRunning) {
+            return;
+        }
+        setTime = checkTimeLeftMillis();
         timerRunning = 0;
         timerPaused = 1;
     }
 
     void resume(){   
-        endTime = setTime + millis();
+        if (!timerPaused) {
+            return;
+        }
+        endTime = millis() + setTime;
         timerRunning = 1;
         timerPaused = 0;
+    }
+
+    void cancel(){
+        reset();
     }
     void reset(){
         timerReady = 1;
         timerRunning = 0;
         timerPaused = 0;
+        setMinutes = 0UL;
+        totalDurationMs = 0UL;
+        setTime = 0UL;
+        endTime = 0UL;
+        currentTime = 0UL;
 
     }
 
     unsigned long checkTimeLeftMillis(){
-        if (millis() > endTime){
+        if (timerPaused) {
+            return setTime;
+        }
+        if (!timerRunning) {
             return 0;
         }
-        else{
-            int timeLeft = endTime - millis();
-            return timeLeft;
-        }   
-        return 0;
+        if (millis() >= endTime){
+            return 0;
+        }
+        return (unsigned long)(endTime - millis());
     }   
 
     unsigned long checkTimeLeftSeconds(){
-        if (millis() > endTime){
-            return 0;
-        }
-        else{
-            int timeLeft = endTime - millis();
-            timeLeft = timeLeft / 1000;
-            return timeLeft;
-        }   
-        return 0;
+        const unsigned long ms = checkTimeLeftMillis();
+        return ms / 1000UL;
     }   
 
-        unsigned long checkTimeLeftMinutes(){
-        if (millis() > endTime){
-            return 0;
-        }
-        else{
-             int timeLeft = endTime - millis();
-            timeLeft = timeLeft / 60000;
-            return timeLeft;
-            
-        }   
-        return 0;
-    } 
+    unsigned long checkTimeLeftMinutes(){
+        const unsigned long ms = checkTimeLeftMillis();
+        return ms / 60000UL;
+    }
 
     bool timeOver(){
-        if (millis() > endTime){
-            return 1;
-        }
-        else {
+        if (!timerRunning) {
             return 0;
         }
+        return millis() >= endTime;
     }
 }; // 

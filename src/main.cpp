@@ -15,6 +15,7 @@
 #include "mysecret.h" // where hidden variables can be placed
 #include "keybinds.h"
 #include "wifi_config.h"
+#include "timer_led_meter.h"
 //#include "ledMation.h"
 
 // EEPROM PROGRAMMING FOR STATE MEMORY
@@ -98,6 +99,38 @@ static void bleTypeString(const String& input);
 
 static constexpr const char* WIFI_AP_SSID = "KRONOS-CONFIG";
 static constexpr const char* PREFS_NAMESPACE = "kronos";
+
+static uint8_t g_ledBrightness = 20;
+
+// Which hall sensor is used to enter WiFi config mode at boot.
+// Pick one you consider "unused" in your normal workflow.
+// 0..5 maps to: LT, RT, LM, RM, LB, RB
+static constexpr size_t WIFI_CONFIG_HALL_INDEX = 4; // LB by default
+static constexpr uint16_t WIFI_CONFIG_HOLD_MS = 500;
+
+static uint8_t applyBrightnessCap(uint8_t requested) {
+  // Treat the web-configured brightness as a global cap.
+  // If other parts of the firmware want dynamic brightness (e.g. knob-based),
+  // they can request a value and we'll scale it into the capped range.
+  //
+  // - requested: 0..255 (FastLED brightness)
+  // - g_ledBrightness: 1..255 (cap)
+  const uint16_t scaled = (uint16_t)requested * (uint16_t)g_ledBrightness / 255U;
+  const uint8_t out = (scaled < 1U) ? 1U : (uint8_t)scaled;
+  FastLED.setBrightness(out);
+  return out;
+}
+
+static bool hallHeldForMs(MxgicHall& hallBtn, uint16_t holdMs) {
+  const uint32_t start = millis();
+  while ((uint32_t)(millis() - start) < holdMs) {
+    if (hallBtn.checkTrig(0) == 0) {
+      return false;
+    }
+    delay(1);
+  }
+  return true;
+}
 
 String hallActions[HALL_BUTTON_COUNT];
 
@@ -260,7 +293,7 @@ void ledFadeUp(CRGB* leds, int numLEDS , CRGB color){
     leds[i] = color;
   }
   FastLED.show();
-  FastLED.setBrightness(hallKnob.scanMapAngle());
+  applyBrightnessCap((uint8_t)hallKnob.scanMapAngle());
 }
 
 enum class ScreenId : int {
@@ -367,8 +400,9 @@ static void renderTimerSetScreen(int timer) {
 }
 
 static void renderTimerLeftScreen() {
-  const int minutesRender = maintimer.checkTimeLeftSeconds() / 60;
-  const int secondsRender = maintimer.checkTimeLeftSeconds() % 60;
+  const int totalSeconds = (int)maintimer.checkTimeLeftSeconds();
+  const int minutesRender = totalSeconds / 60;
+  const int secondsRender = totalSeconds % 60;
   oled.clearDisplay();
   oled.setTextSize(1);
   oled.setCursor(0,0);
@@ -389,7 +423,11 @@ static void renderTimerLeftScreen() {
   oled.println();
   oled.println();
   oled.println();
-  oled.println(F("Pause       Cancel"));
+  if (maintimer.timerPaused) {
+    oled.println(F("Resume      Cancel"));
+  } else {
+    oled.println(F("Pause       Cancel"));
+  }
   oled.display();
 }
 
@@ -397,7 +435,7 @@ static void renderTimerOverScreen() {
   oled.clearDisplay();
   oled.setTextSize(1);
   oled.setCursor(0,0);
-  oled.println(String(maintimer.setTime) + F("M Timer Over:"));
+  oled.println(String(maintimer.setMinutes) + F("M Timer Over:"));
   oled.setTextSize(4);
   oled.println(F("REST"));
   oled.setTextSize(1);
@@ -526,31 +564,87 @@ bool timerMenu (){
   unsigned long menuNowTime = 0UL;
   unsigned long menuTimeDiff = 0UL;
   int timePrint = 0;
+  bool prevLT = false;
+  bool prevRT = false;
   initializedK = false;
   for(;;){
     menuNowTime = millis();
     menuTimeDiff = menuNowTime - menuEnteredTime;
+
+    const bool curLT = (LTBTN.checkTrig(0) != 0);
+    const bool curRT = (RTBTN.checkTrig(0) != 0);
+    const bool ltPressedEdge = curLT && !prevLT;
+    const bool rtPressedEdge = curRT && !prevRT;
+    prevLT = curLT;
+    prevRT = curRT;
+
     if (maintimer.timerRunning == 1 ) {
       // Show time left
       screenRender(ScreenId::TimerLeft, 0, 0);
-      // Check which buttons has been pressed (placeholder for pause/cancel actions)
-      (void)timerMenuKeyScan(menuTimeDiff);
+
+      timerLedMeterUpdateFromRemaining(
+        maintimer.checkTimeLeftMillis(),
+        maintimer.totalDurationMs,
+        TimerLedMode::Running
+      );
+
+      // Pause / Cancel
+      if (ltPressedEdge) {
+        maintimer.pause();
+      } else if (rtPressedEdge) {
+        maintimer.cancel();
+        timerLedMeterClear();
+        return false;
+      }
+
+      // Allow exiting the menu by holding the physical button.
+      if ((digitalRead(BUTTON_PIN) == LOW) && (menuTimeDiff > 1000UL)) {
+        return true;
+      }
+    }
+    else if (maintimer.timerPaused == 1) {
+      // Paused: show the same countdown screen, but with Resume/Cancel
+      screenRender(ScreenId::TimerLeft, 0, 0);
+
+      timerLedMeterUpdateFromRemaining(
+        maintimer.checkTimeLeftMillis(),
+        maintimer.totalDurationMs,
+        TimerLedMode::Paused
+      );
+
+      if (ltPressedEdge) {
+        maintimer.resume();
+      } else if (rtPressedEdge) {
+        maintimer.cancel();
+        timerLedMeterClear();
+        return false;
+      }
     }
     else if (maintimer.timerRunning == 0){
       const int knobValue = hallKnob.scanMapAngle(12,255,1);
       timePrint = maintimer.setCheck(knobValue); // Set Timer Display Based On Rotary Encoder
       screenRender(ScreenId::TimerSet, timePrint, 0); // Render display timer time currently
-      if (LTBTN.checkTrig(0)){ // Check if left button was pressed
+
+      // Fill LEDs based on time being set (relative to 60 minutes max)
+      timerLedMeterUpdateFromMinutes(timePrint);
+
+      if (ltPressedEdge){ // Confirm
         maintimer.start(knobValue); // Start time based on rotary encoder location
+        timerLedMeterUpdateFromRemaining(
+          maintimer.checkTimeLeftMillis(),
+          maintimer.totalDurationMs,
+          TimerLedMode::Running
+        );
         screenRender(ScreenId::TimerSetAck, timePrint, 0, "Timer Set!");
         delay (500);
         return true;
       }
-      else if (RTBTN.checkTrig(0)){
+      else if (rtPressedEdge){ // Cancel
+        timerLedMeterClear();
         return false;
       }
     }
-    delay (25);
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
@@ -563,11 +657,13 @@ bool timerEnd(){
     if (LTBTN.checkTrig(0)){ // Check if left button was pressed 
       solidColor2(leds_75, NUM_LEDS_SCREENARRAY , CRGB::Black);
       maintimer.reset();
+      timerLedMeterClear(true);
       return true;
     }
     else if (RTBTN.checkTrig(0)){
       solidColor2(leds_75, NUM_LEDS_SCREENARRAY , CRGB::Black);
       maintimer.reset();
+      timerLedMeterClear(true);
       timerMenu();
       return true;
     }
@@ -614,9 +710,7 @@ void setup() {
   // Initializing Button
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // Hold the physical button at boot to enter WiFi configuration mode.
-  delay(50);
-  const bool enterWifiConfig = (digitalRead(BUTTON_PIN) == LOW);
+  bool enterWifiConfig = false;
 
   // Initializing Hall Objects
   LTBTN.setChannel(1,0);
@@ -640,14 +734,6 @@ void setup() {
   oled.setTextSize(1);
   oled.setTextColor(SSD1306_WHITE);
 
-  // If requested, enter WiFi config mode now that the screen is initialized.
-  if (enterWifiConfig) {
-    startWifiConfigPortal(WIFI_AP_SSID, PREFS_NAMESPACE, oled, hallActions, HALL_BUTTON_COUNT);
-  }
-
-  // Load configured keybinds (defaults preserved on first boot)
-  keybindsLoadFromPrefs(PREFS_NAMESPACE, hallActions, HALL_BUTTON_COUNT);
-
   // Initialize ADS1115 Modules
   if (!ads1.begin(0x48)) {
     Serial.println("Failed to initialize ADS1115 at 0x48");
@@ -665,13 +751,38 @@ void setup() {
 
   ads2.setDataRate(RATE_ADS1115_860SPS);
 
+  // Hold the selected hall "button" at boot to enter WiFi configuration mode.
+  // ADS1115 must be initialized before hallBtn.checkTrig().
+  if (WIFI_CONFIG_HALL_INDEX < HALL_BUTTON_COUNT) {
+    enterWifiConfig = hallHeldForMs(*hall[WIFI_CONFIG_HALL_INDEX], WIFI_CONFIG_HOLD_MS);
+  }
+
+  // If requested, enter WiFi config mode now that the screen + ADS are initialized.
+  if (enterWifiConfig) {
+    startWifiConfigPortal(WIFI_AP_SSID, PREFS_NAMESPACE, oled, hallActions, HALL_BUTTON_COUNT);
+  }
+
+  // Load configured keybinds (defaults preserved on first boot)
+  keybindsLoadFromPrefs(PREFS_NAMESPACE, hallActions, HALL_BUTTON_COUNT);
+
+  // Load and apply timer meter color style (0=white, 1=gradient)
+  {
+    const uint8_t meterStyle = keybindsLoadMeterStyleFromPrefs(PREFS_NAMESPACE);
+    timerLedMeterSetColorStyle(meterStyle == 1 ? TimerLedColorStyle::Gradient : TimerLedColorStyle::White);
+  }
+
+  // Load global LED brightness (applied after FastLED init)
+  g_ledBrightness = keybindsLoadLedBrightnessFromPrefs(PREFS_NAMESPACE);
+
   // Initialize AS5600 Hall Effect Sensor
   as5600.begin();
 
   // Initialize LED Strips
   FastLED.addLeds<WS2812B, SCREENARRAY, GRB>(leds_75, NUM_LEDS_SCREENARRAY);
   FastLED.addLeds<WS2812B, BUTTONARRAY, GRB>(leds_6, NUM_LEDS_BUTTONARRAY);
-  FastLED.setBrightness(25);
+  applyBrightnessCap(255);
+
+  timerLedMeterInit(leds_75, NUM_LEDS_SCREENARRAY);
 
   // LED Strip Animation
   ledCycle(leds_75, NUM_LEDS_SCREENARRAY);
@@ -749,6 +860,16 @@ void setup() {
 
 void loop() {
   const unsigned long start = micros();
+
+  // If the timer is active, keep the LED bar updated even outside the menu.
+  if (maintimer.timerRunning) {
+    timerLedMeterUpdateFromRemaining(
+      maintimer.checkTimeLeftMillis(),
+      maintimer.totalDurationMs,
+      TimerLedMode::Running
+    );
+  }
+
   if(digitalRead(BUTTON_PIN) == HIGH) { // if button is not pressed
     if (maintimer.timeOver() && (maintimer.timerRunning == 1) ){ // if timer is over
       timerEnd(); 

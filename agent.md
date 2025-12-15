@@ -23,9 +23,9 @@ This file is a working map of the repo to make future coding changes faster and 
 ## Hardware + IO Map (as implemented)
 ### Pins
 - **I2C**: defined in `src/main.cpp`
-  - `SDA0_Pin = 17`
-  - `SCL0_Pin = 18`
-  - Note: `Wire.begin(SCL0_Pin, SDA0_Pin)` is currently called (verify parameter order for ESP32 Arduino: commonly `Wire.begin(sda, scl)`)
+  - `SDA0_Pin = 18`
+  - `SCL0_Pin = 17`
+  - `Wire.begin(SDA0_Pin, SCL0_Pin)` is called (ESP32 Arduino uses `Wire.begin(sda, scl)`)
 - **Button**: GPIO `8` as `INPUT_PULLUP`
 - **WS2812B LEDs**:
   - “Screen array” data pin: `48`, length `75`
@@ -47,9 +47,15 @@ Contains almost all application logic:
 - LED helper functions: `ledCycle`, `ledClear`, `solidColor`, `solidColor2`, `ledFadeUp`
 - UI: `screenRender(screen, timer, misc, optText)`
 - Calibration: `initializeKronos()`
-- Timer UI: `timerMenuKeyScan`, `timerMenu`, `timerEnd` (and stub `timerPause`)
+- Timer UI: `timerMenuKeyScan`, `timerMenu`, `timerEnd` (pause/resume/cancel handled in `timerMenu`)
 - LED “audio level graph” animation: `audioLevelGraph()`
 - Arduino lifecycle: `setup()` and `loop()`
+
+### WiFi keybind modules
+- `src/wifi_config.cpp` + `include/wifi_config.h`
+  - AP mode config portal (`KRONOS-CONFIG`), OLED “WiFi Config Mode” screen, HTTP routes
+- `src/keybinds.cpp` + `include/keybinds.h`
+  - Preferences (NVS) load/save and default initialization for `btn0..btn5`
 
 ### `include/kronosDisplay.h`
 - Provides `displayText` (global `String`)
@@ -82,7 +88,7 @@ Contains almost all application logic:
   - Key methods: `start(index)`, `pause()`, `resume()`, `reset()`, `timeOver()`
 
 ### `include/mxgicDebounce.h`
-- Defines class `MxgicDebounce` with a shift-register style debouncer.
+- Defines class `MxgicDebounce` with a stable-samples edge debouncer (sample-count based).
 
 ### `include/ledMation.h`
 - Defines `LedMation` with a fixed `linearCircleArray` mapping and helper `linearCircle(advance)`.
@@ -94,6 +100,7 @@ Contains almost all application logic:
   - Avoid printing in logs
   - Avoid committing to public repos
   - Consider adding to `.gitignore` if it’s not already
+ - Implementation detail: values are `static const String ...` so the header can be included by multiple `.cpp` files without linker conflicts.
 
 ## Runtime Model (How the firmware behaves)
 ### Startup (`setup()`)
@@ -106,8 +113,8 @@ Contains almost all application logic:
 7. Configure FastLED and run a boot LED cycle.
 8. (Currently) forces initialization/calibration via `LTBTN` or always sets `initializedK=1` and enables scan.
 9. Clears LEDs.
-10. Runs `audioLevelGraph()` (this is a blocking loop until LT button is pressed).
-11. Starts a FreeRTOS task `infiniteScan()`.
+10. Starts a FreeRTOS task `infiniteScan()`.
+11. (Optional) `audioLevelGraph()` exists but is not used as a blocking gate in the default boot path.
 
 ### Main loop (`loop()`)
 - Measures loop duration with `micros()`.
@@ -137,8 +144,7 @@ These are not necessarily “bugs,” but they matter for safe refactors.
    - Double-check ESP32 Arduino signature for `Wire.begin(...)`. If it is `Wire.begin(sda, scl)`, the current call swaps pins.
 
 4. **Debounce implementation**
-   - `MxgicDebounce::debounce()` uses a `static` local `state`, meaning **all instances share one debounce state**.
-   - If per-button debouncing is desired, `state` should be an instance member (not a local static).
+  - Debounce is sample-count based; tune by adjusting the number of stable samples required.
 
 5. **Timer menu scan helper**
    - `timerMenuKeyScan(int)` is declared `bool` but does not return on all paths.
@@ -152,6 +158,10 @@ These are not necessarily “bugs,” but they matter for safe refactors.
 - **New BLE shortcuts**: extend the `infiniteScan()` button mapping.
 - **New LED animations**: add functions like `audioLevelGraph()` and decide whether they should block.
 - **Refactor direction** (if desired): move large subsystems out of `src/main.cpp` into dedicated modules, but first convert header-defined globals to `extern` + a single `.cpp` definition.
+
+## WiFi Keybind Config Notes
+- Portal + persistence were moved out of `src/main.cpp` into `wifi_config` and `keybinds` modules.
+- See `docs/WIFI_KEYBINDS_MODULE_SPLIT.md` for details.
 
 ## FastLED Compatibility Note
 If FastLED is upgraded and the build breaks in `.pio/libdeps/.../FastLED/src/fl/rbtree.h`, revert to the known-good pin:

@@ -21,15 +21,38 @@ static String htmlEscape(const String& input) {
   return out;
 }
 
-static String buildConfigHtml(const String* actions, size_t actionCount) {
+static String buildConfigHtml(const String* actions, size_t actionCount, uint8_t meterStyle, uint8_t ledBrightness) {
   String html;
-  html.reserve(4096);
+  html.reserve(4600);
   html += F("<!doctype html><html><head><meta charset='utf-8'>");
   html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>KRONOS WiFi Config</title></head><body>");
   html += F("<h2>KRONOS Keybind Config</h2>");
   html += F("<p>Enter either <b>TYPE:</b>text to type, or a key combo like <b>CTRL+SHIFT+Z</b>, <b>GUI+NUM_MINUS</b>, <b>DELETE</b>.</p>");
   html += F("<form method='POST' action='/save'>");
+
+  html += F("<div style='margin:10px 0'>");
+  html += F("<label>Timer Meter Style: ");
+  html += F("<select name='meterStyle'>");
+  html += F("<option value='0'");
+  if (meterStyle == 0) html += F(" selected");
+  html += F(">White</option>");
+  html += F("<option value='1'");
+  if (meterStyle == 1) html += F(" selected");
+  html += F(">Gradient</option>");
+  html += F("</select>");
+  html += F("</label></div>");
+
+  html += F("<div style='margin:10px 0'>");
+  html += F("<label>LED Brightness: ");
+  html += F("<input id='b' name='ledBrightness' type='range' min='1' max='255' value='");
+  html += String((int)ledBrightness);
+  html += F("' oninput=\"document.getElementById('bv').value=this.value\"> ");
+  html += F("<input id='bv' type='number' min='1' max='255' value='");
+  html += String((int)ledBrightness);
+  html += F("' oninput=\"document.getElementById('b').value=this.value; document.getElementById('b').dispatchEvent(new Event('input'))\"> ");
+  html += F("</label></div>");
+
   for (size_t i = 0; i < actionCount; i++) {
     html += F("<div style='margin:10px 0'>");
     html += F("<label>");
@@ -73,6 +96,8 @@ void startWifiConfigPortal(const char* ssid,
 
   // Load existing (or initialize defaults) before serving UI.
   keybindsLoadFromPrefs(prefsNamespace, actions, actionCount);
+  uint8_t meterStyle = keybindsLoadMeterStyleFromPrefs(prefsNamespace);
+  uint8_t ledBrightness = keybindsLoadLedBrightnessFromPrefs(prefsNamespace);
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid);
@@ -87,11 +112,25 @@ void startWifiConfigPortal(const char* ssid,
 
   static WebServer server(80);
 
-  server.on("/", HTTP_GET, [actions, actionCount]() {
-    server.send(200, "text/html", buildConfigHtml(actions, actionCount));
+  server.on("/", HTTP_GET, [actions, actionCount, meterStyle, ledBrightness]() {
+    server.send(200, "text/html", buildConfigHtml(actions, actionCount, meterStyle, ledBrightness));
   });
 
-  server.on("/save", HTTP_POST, [prefsNamespace, actions, actionCount]() {
+  server.on("/save", HTTP_POST, [prefsNamespace, actions, actionCount, meterStyle, ledBrightness]() mutable {
+    if (server.hasArg("meterStyle")) {
+      const String v = server.arg("meterStyle");
+      meterStyle = (uint8_t)v.toInt();
+      if (meterStyle > 1) meterStyle = 0;
+    }
+
+    if (server.hasArg("ledBrightness")) {
+      const String v = server.arg("ledBrightness");
+      int b = v.toInt();
+      if (b < 1) b = 1;
+      if (b > 255) b = 255;
+      ledBrightness = (uint8_t)b;
+    }
+
     for (size_t i = 0; i < actionCount; i++) {
       const String argName = keybindsKeyForButton(i);
       if (server.hasArg(argName)) {
@@ -101,6 +140,8 @@ void startWifiConfigPortal(const char* ssid,
     }
 
     keybindsSaveToPrefs(prefsNamespace, actions, actionCount);
+    keybindsSaveMeterStyleToPrefs(prefsNamespace, meterStyle);
+    keybindsSaveLedBrightnessToPrefs(prefsNamespace, ledBrightness);
 
     server.send(200, "text/html", F("<html><body><h3>Saved. Rebooting...</h3></body></html>"));
     delay(500);
