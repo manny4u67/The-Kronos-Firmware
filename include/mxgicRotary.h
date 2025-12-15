@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <AS5600.h>
 // AS5600 Hall Effect Sensor
-AS5600 as5600;
+extern AS5600 as5600;
 
 class MxgicRotary {
     private:

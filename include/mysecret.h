@@ -1,4 +1,4 @@
 #include "Arduino.h"
 
-String PhantomPass = "";
-String MainSolWallet = "";
+String PhantomPass = "BIGBREAD";
+String MainSolWallet = "BIGGERBREAD";

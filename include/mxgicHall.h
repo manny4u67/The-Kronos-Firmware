@@ -2,8 +2,8 @@
 #include <Adafruit_ADS1X15.h>
 
 // ADS1115 
-Adafruit_ADS1115 ads1;  // First ADS1115 at 0x49
-Adafruit_ADS1115 ads2;  // Second ADS1115 at 0x48
+extern Adafruit_ADS1115 ads1;  // First ADS1115
+extern Adafruit_ADS1115 ads2;  // Second ADS1115
 
   #if __has_include (<AS5600.h>)
     const bool USE_AS5600 = 1;
