@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <Adafruit_SSD1306.h>
 
+#include "diagnostics_web.h"
+
 // Starts the WiFi AP + HTTP portal and blocks forever until the device reboots.
 // - ssid: AP SSID (open AP)
 // - prefsNamespace: Preferences namespace used for keybind storage
@@ -13,4 +15,5 @@ void startWifiConfigPortal(const char* ssid,
                            const char* prefsNamespace,
                            Adafruit_SSD1306& oled,
                            String* actions,
-                           size_t actionCount);
+                           size_t actionCount,
+                           const DiagnosticsContext* diagCtx = nullptr);

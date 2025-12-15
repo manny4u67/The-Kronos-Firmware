@@ -15,6 +15,7 @@
 #include "mysecret.h" // where hidden variables can be placed
 #include "keybinds.h"
 #include "wifi_config.h"
+#include "diagnostics_web.h"
 #include "timer_led_meter.h"
 //#include "ledMation.h"
 
@@ -757,32 +758,42 @@ void setup() {
     enterWifiConfig = hallHeldForMs(*hall[WIFI_CONFIG_HALL_INDEX], WIFI_CONFIG_HOLD_MS);
   }
 
-  // If requested, enter WiFi config mode now that the screen + ADS are initialized.
-  if (enterWifiConfig) {
-    startWifiConfigPortal(WIFI_AP_SSID, PREFS_NAMESPACE, oled, hallActions, HALL_BUTTON_COUNT);
-  }
-
-  // Load configured keybinds (defaults preserved on first boot)
-  keybindsLoadFromPrefs(PREFS_NAMESPACE, hallActions, HALL_BUTTON_COUNT);
-
-  // Load and apply timer meter color style (0=white, 1=gradient)
+  // Load global LED brightness and meter style before we potentially enter config mode.
+  // (Config mode can now test LEDs.)
+  g_ledBrightness = keybindsLoadLedBrightnessFromPrefs(PREFS_NAMESPACE);
   {
     const uint8_t meterStyle = keybindsLoadMeterStyleFromPrefs(PREFS_NAMESPACE);
     timerLedMeterSetColorStyle(meterStyle == 1 ? TimerLedColorStyle::Gradient : TimerLedColorStyle::White);
   }
 
-  // Load global LED brightness (applied after FastLED init)
-  g_ledBrightness = keybindsLoadLedBrightnessFromPrefs(PREFS_NAMESPACE);
-
-  // Initialize AS5600 Hall Effect Sensor
-  as5600.begin();
-
-  // Initialize LED Strips
+  // Initialize LED Strips early so diagnostics mode can test LEDs.
   FastLED.addLeds<WS2812B, SCREENARRAY, GRB>(leds_75, NUM_LEDS_SCREENARRAY);
   FastLED.addLeds<WS2812B, BUTTONARRAY, GRB>(leds_6, NUM_LEDS_BUTTONARRAY);
   applyBrightnessCap(255);
 
   timerLedMeterInit(leds_75, NUM_LEDS_SCREENARRAY);
+
+  DiagnosticsContext diagCtx;
+  diagCtx.hall = hall;
+  diagCtx.hallCount = HALL_BUTTON_COUNT;
+  diagCtx.knob = &hallKnob;
+  diagCtx.physicalButtonPin = BUTTON_PIN;
+  diagCtx.ledsScreen = leds_75;
+  diagCtx.ledsScreenCount = NUM_LEDS_SCREENARRAY;
+  diagCtx.ledsButtons = leds_6;
+  diagCtx.ledsButtonsCount = NUM_LEDS_BUTTONARRAY;
+  diagCtx.prefsNamespace = PREFS_NAMESPACE;
+
+  // If requested, enter WiFi config mode now that the screen + ADS are initialized.
+  if (enterWifiConfig) {
+    startWifiConfigPortal(WIFI_AP_SSID, PREFS_NAMESPACE, oled, hallActions, HALL_BUTTON_COUNT, &diagCtx);
+  }
+
+  // Load configured keybinds (defaults preserved on first boot)
+  keybindsLoadFromPrefs(PREFS_NAMESPACE, hallActions, HALL_BUTTON_COUNT);
+
+  // Initialize AS5600 Hall Effect Sensor
+  as5600.begin();
 
   // LED Strip Animation
   ledCycle(leds_75, NUM_LEDS_SCREENARRAY);

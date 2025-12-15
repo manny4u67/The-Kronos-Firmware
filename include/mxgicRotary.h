@@ -1,3 +1,5 @@
+#pragma once
+
 #include <Arduino.h>
 #include <AS5600.h>
 // AS5600 Hall Effect Sensor
